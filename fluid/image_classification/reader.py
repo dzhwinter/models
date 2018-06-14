@@ -4,6 +4,7 @@ import random
 import functools
 import numpy as np
 import paddle
+import paddle.fluid as fluid
 from PIL import Image, ImageEnhance
 
 random.seed(0)
@@ -98,16 +99,17 @@ def distort_color(img):
 
 
 def process_image(sample, mode, color_jitter, rotate):
-    img_path = sample[0]
+    img = sample[0]
+    # img_path = sample[0]
 
-    img = Image.open(img_path)
+    # img = Image.open(img_path)
     if mode == 'train':
         if rotate: img = rotate_image(img)
         img = random_crop(img, DATA_DIM)
     else:
         img = resize_short(img, target_size=256)
         img = crop_image(img, target_size=DATA_DIM, center=True)
-    if mode == 'train':
+    if mode == 'trprocess_imageain':
         if color_jitter:
             img = distort_color(img)
         if random.randint(0, 1) == 1:
@@ -124,6 +126,11 @@ def process_image(sample, mode, color_jitter, rotate):
         return img, sample[1]
     elif mode == 'test':
         return [img]
+
+def minus_mean(sample):
+    img = np.array(img).astype('float32').transpose((2, 0, 1)) / 255
+    img -= img_mean
+    img /= img_std
 
 
 def _reader_creator(file_list,
@@ -149,6 +156,27 @@ def _reader_creator(file_list,
         process_image, mode=mode, color_jitter=color_jitter, rotate=rotate)
 
     return paddle.reader.xmap_readers(mapper, reader, THREAD, BUF_SIZE)
+
+def _reader_creator2(mode, shuffle=False, color_jitter=False, rotate=False):
+    mapper = functools.partial(
+        process_image, mode=mode, color_jitter=color_jitter, rotate=rotate)
+
+    return paddle.reader.xmap_readers(mapper, paddle.dataset.flowers.train(), THREAD, BUF_SIZE)
+
+shape = [3, 224, 224]
+label = range(102)
+np.random.seed(100)
+def fake_reader():
+    def reader():
+        while True:
+            yield np.random.uniform(size=shape), np.random.choice(label)
+    return reader
+
+def mytrain():
+    return _reader_creator2("train")
+
+def mytest():
+    return _reader_creator2("test")
 
 
 def train(file_list=TRAIN_LIST):

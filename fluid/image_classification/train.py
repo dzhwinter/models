@@ -2,6 +2,7 @@ import os
 import numpy as np
 import time
 import sys
+import functools
 import paddle
 import paddle.fluid as fluid
 import models
@@ -32,6 +33,8 @@ add_arg('model',            str,   "SE_ResNeXt50_32x4d", "Set the network to use
 
 model_list = [m for m in dir(models) if "__" not in m]
 
+paddle.fluid.default_main_program().random_seed = 100
+paddle.fluid.default_startup_program().random_seed = 100
 
 def optimizer_setting(params):
     ls = params["learning_strategy"]
@@ -98,9 +101,10 @@ def train(args):
     label = fluid.layers.data(name='label', shape=[1], dtype='int64')
 
     # model definition
+    # print(models.__dict__)
     model = models.__dict__[model_name]()
 
-    if model_name is "GoogleNet":
+    if model_name == "GoogleNet":
         out0, out1, out2 = model.net(input=image, class_dim=class_dim)
         cost0 = fluid.layers.cross_entropy(input=out0, label=label)
         cost1 = fluid.layers.cross_entropy(input=out1, label=label)
@@ -134,8 +138,6 @@ def train(args):
     optimizer = optimizer_setting(params)
     opts = optimizer.minimize(avg_cost)
 
-    if with_memory_optimization:
-        fluid.memory_optimize(fluid.default_main_program())
 
     place = fluid.CUDAPlace(0) if args.use_gpu else fluid.CPUPlace()
     exe = fluid.Executor(place)
@@ -153,20 +155,23 @@ def train(args):
 
     train_batch_size = args.batch_size
     test_batch_size = 16
-    train_reader = paddle.batch(reader.train(), batch_size=train_batch_size)
-    test_reader = paddle.batch(reader.val(), batch_size=test_batch_size)
+    # train_reader = paddle.batch(paddle.dataset.flowers.test(), batch_size=train_batch_size)
+    test_reader = paddle.batch(paddle.dataset.flowers.test(), batch_size=test_batch_size)
     feeder = fluid.DataFeeder(place=place, feed_list=[image, label])
-
     train_exe = fluid.ParallelExecutor(use_cuda=True, loss_name=avg_cost.name)
 
-    fetch_list = [avg_cost.name, acc_top1.name, acc_top5.name]
+    train_reader = paddle.batch(reader.fake_reader(), batch_size=train_batch_size)
+    fetch_list = [avg_cost.name, acc_top1.name, acc_top5.name, avg_cost0.name, avg_cost1.name, avg_cost2.name]
+
+    if with_memory_optimization:
+        fluid.memory_optimize(fluid.default_main_program(), skip_opt_set=set(fetch_list))
 
     for pass_id in range(params["num_epochs"]):
         train_info = [[], [], []]
         test_info = [[], [], []]
         for batch_id, data in enumerate(train_reader()):
             t1 = time.time()
-            loss, acc1, acc5 = train_exe.run(fetch_list, feed=feeder.feed(data))
+            loss, acc1, acc5, cost0, cost1, cost2 = train_exe.run(fetch_list, feed=feeder.feed(data))
             t2 = time.time()
             period = t2 - t1
             loss = np.mean(np.array(loss))
@@ -175,11 +180,11 @@ def train(args):
             train_info[0].append(loss)
             train_info[1].append(acc1)
             train_info[2].append(acc5)
-            if batch_id % 10 == 0:
+            if batch_id % 1 == 0:
                 print("Pass {0}, trainbatch {1}, loss {2}, \
-                       acc1 {3}, acc5 {4} time {5}"
+                       acc1 {3}, acc5 {4}, {5}, {6}, {7}, time {8}"
                                                    .format(pass_id, \
-                       batch_id, loss, acc1, acc5, \
+                                                           batch_id, loss, acc1, acc5, np.array(cost0), np.array(cost1), np.array(cost2), \
                        "%2.2f sec" % period))
                 sys.stdout.flush()
 
